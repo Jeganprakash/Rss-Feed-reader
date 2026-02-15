@@ -2,7 +2,8 @@ import Database from 'better-sqlite3';
 import path from 'path';
 import fs from 'fs';
 
-const DB_PATH = process.env.DATABASE_PATH || './data/feed.db';
+// Use /tmp for Vercel serverless (ephemeral but writable)
+const DB_PATH = process.env.DATABASE_PATH || '/tmp/feed.db';
 
 let db: Database.Database | null = null;
 
