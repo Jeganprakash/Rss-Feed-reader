@@ -2,6 +2,9 @@ import { NextResponse } from 'next/server';
 import { getDb, initDb } from '@/lib/db';
 import type { FeedSource } from '@/types/feed';
 
+// Force dynamic rendering
+export const dynamic = 'force-dynamic';
+
 let initialized = false;
 
 function ensureDb() {

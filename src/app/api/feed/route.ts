@@ -2,6 +2,9 @@ import { NextRequest, NextResponse } from 'next/server';
 import { initDb } from '@/lib/db';
 import { getMixedFeed } from '@/lib/feed-mixer';
 
+// Force dynamic rendering (don't try to statically generate)
+export const dynamic = 'force-dynamic';
+
 let initialized = false;
 
 function ensureDb() {

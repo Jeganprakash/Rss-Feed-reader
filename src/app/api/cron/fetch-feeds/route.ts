@@ -2,6 +2,9 @@ import { NextRequest, NextResponse } from 'next/server';
 import { initDb } from '@/lib/db';
 import { fetchAllFeeds } from '@/lib/rss-fetcher';
 
+// Force dynamic rendering
+export const dynamic = 'force-dynamic';
+
 let initialized = false;
 
 function ensureDb() {
