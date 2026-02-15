@@ -1,0 +1,28 @@
+{
+  "buildCommand": "npm run build",
+  "outputDirectory": ".next",
+  "crons": [
+    {
+      "path": "/api/cron/fetch-feeds",
+      "schedule": "*/15 * * * *"
+    }
+  ],
+  "env": {
+    "DATABASE_PATH": "./data/feed.db",
+    "REUTERS_RSS_URL": "https://news.google.com/rss/search?q=site%3Areuters.com&hl=en-US&gl=US&ceid=US%3Aen",
+    "VERGE_RSS_URL": "https://www.theverge.com/rss/index.xml",
+    "TECHCRUNCH_RSS_URL": "https://techcrunch.com/feed/",
+    "FETCH_INTERVAL_MINUTES": "15"
+  },
+  "headers": [
+    {
+      "source": "/api/(.*)",
+      "headers": [
+        {
+          "key": "Cache-Control",
+          "value": "s-maxage=60, stale-while-revalidate"
+        }
+      ]
+    }
+  ]
+}

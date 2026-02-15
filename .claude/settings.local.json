@@ -1,0 +1,22 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(chmod:*)",
+      "Bash(npm install:*)",
+      "Bash(npx next build:*)",
+      "Bash(ls:*)",
+      "Bash(npm run build:*)",
+      "Bash(npm rebuild:*)",
+      "Bash(npm uninstall:*)",
+      "Bash(npm run dev:*)",
+      "Bash(curl:*)",
+      "Bash(node --version:*)",
+      "Bash(/opt/homebrew/bin/node:*)",
+      "Bash(/opt/homebrew/bin/npm uninstall sql.js)",
+      "Bash(/opt/homebrew/bin/npm install better-sqlite3)",
+      "Bash(/opt/homebrew/bin/npm install @types/better-sqlite3)",
+      "Bash(/opt/homebrew/bin/npm run migrate)",
+      "Bash(/opt/homebrew/bin/npm run dev)"
+    ]
+  }
+}
