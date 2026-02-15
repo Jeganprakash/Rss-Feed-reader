@@ -80,6 +80,19 @@ export default function InfiniteFeed() {
     );
   }
 
+  if (!initialLoad && items.length === 0) {
+    return (
+      <div className="py-12 text-center">
+        <p className="mb-3 text-feed-muted">
+          No articles yet. Feed will populate soon.
+        </p>
+        <p className="text-sm text-feed-muted">
+          Cron job runs daily at midnight UTC to fetch fresh articles.
+        </p>
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-3">
       {items.map((item) => (

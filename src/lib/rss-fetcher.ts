@@ -37,16 +37,29 @@ async function resolveGoogleNewsUrl(googleUrl: string): Promise<string> {
 
 async function fetchSingleSource(source: FeedSource): Promise<RawFeedEntry[]> {
   const url = FEED_SOURCES[source];
-  const feed = await parser.parseURL(url);
+
+  // Add timeout to prevent hanging
+  const feed = await Promise.race([
+    parser.parseURL(url),
+    new Promise((_, reject) =>
+      setTimeout(() => reject(new Error('Feed fetch timeout')), 8000)
+    )
+  ]) as any;
 
   const entries: RawFeedEntry[] = [];
-  for (const item of feed.items || []) {
+
+  // Process only first 30 items to stay within Vercel timeout
+  const itemsToProcess = (feed.items || []).slice(0, 30);
+
+  for (const item of itemsToProcess) {
     if (!item.title || !item.link) continue;
 
     let link = item.link;
 
-    // For Reuters via Google News, resolve the redirect to get the real URL
-    if (source === 'REUTERS') {
+    // Skip Google News redirect resolution on Vercel (too slow)
+    // Use the redirect URL directly - it still works for clicking
+    if (source === 'REUTERS' && !process.env.VERCEL) {
+      // Only resolve locally, not on Vercel
       link = await resolveGoogleNewsUrl(link);
     }
 
