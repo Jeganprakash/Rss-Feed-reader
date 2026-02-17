@@ -4,12 +4,13 @@ import { fetchAllFeeds } from '@/lib/rss-fetcher';
 
 // Force dynamic rendering
 export const dynamic = 'force-dynamic';
+export const runtime = 'nodejs';
 
 let initialized = false;
 
-function ensureDb() {
+async function ensureDb() {
   if (!initialized) {
-    initDb();
+    await initDb();
     initialized = true;
   }
 }
@@ -24,7 +25,7 @@ export async function POST(request: NextRequest) {
   }
 
   try {
-    ensureDb();
+    await ensureDb();
     const itemsIngested = await fetchAllFeeds();
 
     return NextResponse.json({ ok: true, itemsIngested });

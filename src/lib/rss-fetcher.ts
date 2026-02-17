@@ -109,13 +109,15 @@ function updateSourceMetadata(
   source: FeedSource,
   status: string,
   error: string | null
-): void {
+): Promise<void> {
   const db = getDb();
-  db.prepare(
-    `UPDATE source_metadata
-     SET last_fetch_time = ?, last_fetch_status = ?, last_error = ?
-     WHERE source = ?`
-  ).run(new Date().toISOString(), status, error, source);
+  return db`
+    UPDATE source_metadata
+    SET last_fetch_time = ${new Date().toISOString()},
+        last_fetch_status = ${status},
+        last_error = ${error}
+    WHERE source = ${source}
+  `.then(() => undefined);
 }
 
 /**
@@ -124,11 +126,6 @@ function updateSourceMetadata(
  */
 export async function fetchAllFeeds(): Promise<number> {
   const db = getDb();
-  const insertStmt = db.prepare(
-    `INSERT OR IGNORE INTO feed_items
-       (id, title, source, published_at, url_original, url_source, created_at, normalized_title)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
-  );
 
   let totalIngested = 0;
 
@@ -139,29 +136,38 @@ export async function fetchAllFeeds(): Promise<number> {
       for (const entry of entries) {
         const normTitle = normalizeTitle(entry.title);
 
-        if (isDuplicate(db, entry.link, normTitle)) {
+        if (await isDuplicate(entry.link, normTitle)) {
           continue;
         }
 
         const now = new Date().toISOString();
-        insertStmt.run(
-          randomUUID(),
-          entry.title,
-          entry.source,
-          new Date(entry.pubDate).toISOString(),
-          source === 'REUTERS' ? entry.link : null,
-          entry.link,
-          now,
-          normTitle
-        );
-        totalIngested++;
+        const inserted = (await db`
+          INSERT INTO feed_items
+            (id, title, source, published_at, url_original, url_source, created_at, normalized_title)
+          VALUES
+            (
+              ${randomUUID()},
+              ${entry.title},
+              ${entry.source},
+              ${new Date(entry.pubDate).toISOString()},
+              ${source === 'REUTERS' ? entry.link : null},
+              ${entry.link},
+              ${now},
+              ${normTitle}
+            )
+          ON CONFLICT DO NOTHING
+          RETURNING id
+        `) as Array<{ id: string }>;
+        if (inserted.length > 0) {
+          totalIngested++;
+        }
       }
 
-      updateSourceMetadata(source, 'ok', null);
+      await updateSourceMetadata(source, 'ok', null);
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
       console.error(`Failed to fetch ${source}: ${message}`);
-      updateSourceMetadata(source, 'error', message);
+      await updateSourceMetadata(source, 'error', message);
     }
   }
 

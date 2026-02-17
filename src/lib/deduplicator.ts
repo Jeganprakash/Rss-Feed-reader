@@ -1,4 +1,4 @@
-import type Database from 'better-sqlite3';
+import { getDb } from './db';
 
 /**
  * Normalize a title for deduplication comparison.
@@ -20,30 +20,24 @@ export function normalizeTitle(title: string): string {
  * 1. Exact URL match (url_source or url_original)
  * 2. Exact normalized title match
  */
-export function isDuplicate(
-  db: Database.Database,
+export async function isDuplicate(
   url: string,
   normalizedTitle: string
-): boolean {
-  // Check URL match
-  const urlMatch = db
-    .prepare(
-      `SELECT 1 FROM feed_items
-       WHERE url_source = ? OR url_original = ?
-       LIMIT 1`
-    )
-    .get(url, url);
+): Promise<boolean> {
+  const db = getDb();
 
-  if (urlMatch) return true;
+  const urlMatch = (await db`
+    SELECT 1 FROM feed_items
+    WHERE url_source = ${url} OR url_original = ${url}
+    LIMIT 1
+  `) as Array<{ exists: number }>;
+  if (urlMatch.length > 0) return true;
 
-  // Check normalized title match
-  const titleMatch = db
-    .prepare(
-      `SELECT 1 FROM feed_items
-       WHERE normalized_title = ?
-       LIMIT 1`
-    )
-    .get(normalizedTitle);
+  const titleMatch = (await db`
+    SELECT 1 FROM feed_items
+    WHERE normalized_title = ${normalizedTitle}
+    LIMIT 1
+  `) as Array<{ exists: number }>;
 
-  return !!titleMatch;
+  return titleMatch.length > 0;
 }

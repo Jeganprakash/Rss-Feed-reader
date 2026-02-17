@@ -26,7 +26,7 @@ In Vercel dashboard, add these environment variables:
 
 ```
 CRON_SECRET=<generate-random-secret>
-DATABASE_PATH=./data/feed.db
+DATABASE_URL=postgresql://USER:PASSWORD@HOST/DB?sslmode=require
 NODE_ENV=production
 ```
 
@@ -87,34 +87,16 @@ This runs every 15 minutes. Vercel automatically adds authentication.
 
 ## Database Considerations
 
-### SQLite (Default - V1)
+### Neon Postgres (Current)
 
 **Pros:**
-- Simple, no external dependencies
-- Zero configuration
-- Works immediately
+- Persistent across deployments and runtime invocations
+- Managed Postgres with zero local DB file handling
+- Works well with serverless Next.js APIs
 
-**Cons:**
-- Ephemeral on Vercel (resets on redeploy)
-- Not persistent across function invocations
-- Limited to single instance
-
-**Best for:** Demo, V1, low traffic
-
-### Upgrade to Postgres (V2)
-
-For production scale, migrate to Vercel Postgres:
-
-1. Enable Vercel Postgres in dashboard
-2. Update `src/lib/db.ts` to use `@vercel/postgres`
-3. Run migrations against Postgres
-4. Update env vars
-
-**Migration script** (create when needed):
-```sql
--- Postgres version of schema
--- Run via Vercel Postgres dashboard or `psql`
-```
+**Requirements:**
+- Set `DATABASE_URL` in each environment (Production/Preview/Development)
+- Keep SSL enabled in the connection string (`sslmode=require`)
 
 ## Monitoring
 
@@ -179,7 +161,7 @@ jobs:
 ### Development (.env.local)
 
 ```env
-DATABASE_PATH=./data/feed.db
+DATABASE_URL=postgresql://USER:PASSWORD@HOST/DB?sslmode=require
 CRON_SECRET=dev-secret-not-for-production
 NODE_ENV=development
 ```
@@ -215,7 +197,7 @@ Currently using Node.js runtime. For global performance, consider Edge Runtime:
 export const runtime = 'edge';
 ```
 
-**Note**: Edge runtime doesn't support SQLite. Requires Postgres or external DB.
+**Note**: Edge runtime has different database constraints. This project currently uses Node.js runtime APIs with Neon Postgres.
 
 ### Caching
 
@@ -274,7 +256,7 @@ API routes already include cache headers (see `vercel.json`):
 
 Consider Vercel Pro ($20/month) if:
 - Traffic exceeds 100 GB bandwidth/month
-- Need Vercel Postgres for persistent DB
+- Need higher Neon/Postgres capacity than free tier
 - Require team collaboration features
 
 ## Troubleshooting
@@ -311,13 +293,11 @@ curl https://your-app.vercel.app/api/health
 ### Database Issues
 
 ```bash
-# Re-run migrations locally
-npm run migrate
+# Verify DATABASE_URL is set
+vercel env ls
 
-# Check database file exists
-ls -lh data/feed.db
-
-# For Vercel: Database recreates on each cold start (expected with SQLite)
+# Trigger schema bootstrap via health route
+curl https://your-app.vercel.app/api/health -u YOUR_APP_AUTH_USER:YOUR_APP_AUTH_PASS
 ```
 
 ## Next Steps Post-Deployment

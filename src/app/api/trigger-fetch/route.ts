@@ -1,9 +1,11 @@
 import { NextResponse } from 'next/server';
 import { initDb } from '@/lib/db';
 import { fetchAllFeeds } from '@/lib/rss-fetcher';
+import { getMixedFeed } from '@/lib/feed-mixer';
 
 // Force dynamic rendering
 export const dynamic = 'force-dynamic';
+export const runtime = 'nodejs';
 
 const COOLDOWN_MS = 60_000;
 
@@ -11,9 +13,9 @@ let initialized = false;
 let fetchInProgress = false;
 let lastTriggeredAt = 0;
 
-function ensureDb() {
+async function ensureDb() {
   if (!initialized) {
-    initDb();
+    await initDb();
     initialized = true;
   }
 }
@@ -60,14 +62,18 @@ async function runManualFetch() {
   lastTriggeredAt = now;
 
   try {
-    ensureDb();
+    await ensureDb();
     const itemsIngested = await fetchAllFeeds();
+    const snapshot = await getMixedFeed({ limit: 20 });
 
     return jsonNoStore(
       {
         ok: true,
         itemsIngested,
         message: 'Feed pull completed successfully',
+        items: snapshot.items,
+        nextCursor: snapshot.nextCursor,
+        hasMore: snapshot.hasMore,
       }
     );
   } catch (err: unknown) {

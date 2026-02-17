@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useEffect, useMemo } from "react";
+import { useState, useCallback, useEffect, useMemo, useRef } from "react";
 import { useInView } from "react-intersection-observer";
 import FeedCard from "./FeedCard";
 import type { FeedItem, FeedResponse, FeedSource } from "@/types/feed";
@@ -16,6 +16,9 @@ interface FetchFeedOptions {
 interface TriggerFetchResponse {
   ok: boolean;
   itemsIngested?: number;
+  items?: FeedItem[];
+  nextCursor?: string | null;
+  hasMore?: boolean;
   error?: string;
   retryAfterSeconds?: number;
 }
@@ -63,6 +66,19 @@ function getNewestTimestamp(item: FeedItem): number {
   return parseDateToTime(item.createdAt);
 }
 
+function dedupeItemsById(items: FeedItem[]): FeedItem[] {
+  const seen = new Set<string>();
+  const deduped: FeedItem[] = [];
+
+  for (const item of items) {
+    if (!item?.id || seen.has(item.id)) continue;
+    seen.add(item.id);
+    deduped.push(item);
+  }
+
+  return deduped;
+}
+
 export default function InfiniteFeed() {
   const [items, setItems] = useState<FeedItem[]>([]);
   const [cursor, setCursor] = useState<string | null>(null);
@@ -78,6 +94,7 @@ export default function InfiniteFeed() {
   const [rankError, setRankError] = useState<string | null>(null);
   const [sortMode, setSortMode] = useState<SortMode>("priority");
   const [sourceFilter, setSourceFilter] = useState<SourceFilter>("ALL");
+  const loadingRef = useRef(false);
 
   const { ref: bottomRef, inView } = useInView({ threshold: 0 });
 
@@ -87,7 +104,8 @@ export default function InfiniteFeed() {
       mode = "append",
       bypassCache = false,
     }: FetchFeedOptions): Promise<boolean> => {
-      if (loading) return false;
+      if (loadingRef.current) return false;
+      loadingRef.current = true;
       setLoading(true);
       setError(null);
 
@@ -103,9 +121,9 @@ export default function InfiniteFeed() {
         const data: FeedResponse = await res.json();
 
         if (mode === "replace") {
-          setItems(data.items);
+          setItems(dedupeItemsById(data.items));
         } else {
-          setItems((prev) => [...prev, ...data.items]);
+          setItems((prev) => dedupeItemsById([...prev, ...data.items]));
         }
         setCursor(data.nextCursor);
         setHasMore(data.hasMore);
@@ -114,11 +132,12 @@ export default function InfiniteFeed() {
         setError("Could not load feed. Please try again.");
         return false;
       } finally {
+        loadingRef.current = false;
         setLoading(false);
         setInitialLoad(false);
       }
     },
-    [loading]
+    []
   );
 
   const handlePullNewFeed = useCallback(async () => {
@@ -127,6 +146,8 @@ export default function InfiniteFeed() {
     setPulling(true);
     setPullMessage(null);
     setPullError(null);
+    setRankMessage(null);
+    setRankError(null);
 
     try {
       const res = await fetch("/api/trigger-fetch", {
@@ -159,14 +180,20 @@ export default function InfiniteFeed() {
             }.`
       );
 
-      const refreshed = await fetchFeed({
-        currentCursor: null,
-        mode: "replace",
-        bypassCache: true,
-      });
+      if (Array.isArray(payload.items)) {
+        setItems(dedupeItemsById(payload.items));
+        setCursor(payload.nextCursor ?? null);
+        setHasMore(Boolean(payload.hasMore));
+      } else {
+        const refreshed = await fetchFeed({
+          currentCursor: null,
+          mode: "replace",
+          bypassCache: true,
+        });
 
-      if (!refreshed) {
-        setPullError("Feed was pulled, but refresh failed. Please retry.");
+        if (!refreshed) {
+          setPullError("Feed was pulled, but refresh failed. Please retry.");
+        }
       }
     } catch (err: unknown) {
       const message =
@@ -185,6 +212,8 @@ export default function InfiniteFeed() {
     setRanking(true);
     setRankMessage(null);
     setRankError(null);
+    setPullMessage(null);
+    setPullError(null);
 
     try {
       const rankInput = [...items]
@@ -270,9 +299,19 @@ export default function InfiniteFeed() {
 
     return [...filteredItems].sort((a, b) => {
       if (sortMode === "priority") {
-        const aScore = a.importanceScore ?? 50;
-        const bScore = b.importanceScore ?? 50;
-        if (aScore !== bScore) return bScore - aScore;
+        const aRanked = typeof a.importanceScore === "number";
+        const bRanked = typeof b.importanceScore === "number";
+
+        // Ranked items should always be shown ahead of unranked ones.
+        if (aRanked !== bRanked) {
+          return aRanked ? -1 : 1;
+        }
+
+        if (aRanked && bRanked) {
+          const aScore = a.importanceScore ?? 0;
+          const bScore = b.importanceScore ?? 0;
+          if (aScore !== bScore) return bScore - aScore;
+        }
       }
 
       return getNewestTimestamp(b) - getNewestTimestamp(a);
@@ -282,16 +321,14 @@ export default function InfiniteFeed() {
   // Initial load
   useEffect(() => {
     fetchFeed({ currentCursor: null, mode: "replace", bypassCache: true });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [fetchFeed]);
 
   // Load more when bottom is in view
   useEffect(() => {
     if (inView && hasMore && !loading && !pulling && !ranking) {
       fetchFeed({ currentCursor: cursor, mode: "append" });
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [inView, hasMore, pulling, ranking]);
+  }, [cursor, fetchFeed, hasMore, inView, loading, pulling, ranking]);
 
   if (initialLoad) {
     return (

@@ -4,19 +4,30 @@ import { getMixedFeed } from '@/lib/feed-mixer';
 
 // Force dynamic rendering (don't try to statically generate)
 export const dynamic = 'force-dynamic';
+export const runtime = 'nodejs';
 
 let initialized = false;
 
-function ensureDb() {
+async function ensureDb() {
   if (!initialized) {
-    initDb();
+    await initDb();
     initialized = true;
   }
 }
 
+function jsonNoStore(body: object, init?: ResponseInit) {
+  return NextResponse.json(body, {
+    ...init,
+    headers: {
+      ...init?.headers,
+      'Cache-Control': 'no-store',
+    },
+  });
+}
+
 export async function GET(request: NextRequest) {
   try {
-    ensureDb();
+    await ensureDb();
 
     const { searchParams } = request.nextUrl;
     const cursor = searchParams.get('cursor') || undefined;
@@ -24,18 +35,18 @@ export async function GET(request: NextRequest) {
     const limit = limitParam ? parseInt(limitParam, 10) : 20;
 
     if (limitParam && (isNaN(limit) || limit < 1 || limit > 50)) {
-      return NextResponse.json(
+      return jsonNoStore(
         { error: 'limit must be between 1 and 50' },
         { status: 400 }
       );
     }
 
-    const result = getMixedFeed({ cursor, limit });
+    const result = await getMixedFeed({ cursor, limit });
 
-    return NextResponse.json(result);
+    return jsonNoStore(result);
   } catch (err: unknown) {
     console.error('Feed API error:', err);
-    return NextResponse.json(
+    return jsonNoStore(
       { error: 'Internal server error' },
       { status: 500 }
     );

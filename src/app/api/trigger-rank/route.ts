@@ -5,6 +5,7 @@ import { rankTopNewestArticles, rankProvidedArticles } from '@/lib/article-ranke
 
 // Force dynamic rendering
 export const dynamic = 'force-dynamic';
+export const runtime = 'nodejs';
 
 const DEFAULT_TOP_N = 20;
 const MAX_TOP_N = 100;
@@ -15,9 +16,9 @@ let initialized = false;
 let rankingInProgress = false;
 let lastTriggeredAt = 0;
 
-function ensureDb() {
+async function ensureDb() {
   if (!initialized) {
-    initDb();
+    await initDb();
     initialized = true;
   }
 }
@@ -153,7 +154,7 @@ export async function POST(request: NextRequest) {
   lastTriggeredAt = now;
 
   try {
-    ensureDb();
+    await ensureDb();
     let result = await rankTopNewestArticles(topN);
     let usedProvidedItems = false;
 

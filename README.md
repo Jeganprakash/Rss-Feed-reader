@@ -18,16 +18,14 @@ A modern, mobile-first news aggregator that combines RSS feeds from Reuters, The
 
 - **Frontend**: Next.js 14 (App Router), TypeScript, Tailwind CSS
 - **Backend**: Next.js API Routes, Node.js
-- **Database**: SQLite (better-sqlite3)
+- **Database**: Neon Postgres
 - **Deployment**: Vercel with Cron Jobs
 
 ## Getting Started
 
 ### Prerequisites
 
-- **Node.js 20 (LTS)** - **Required** for better-sqlite3 compatibility
-  - ⚠️ **Important**: Node.js v25+ is not yet supported by better-sqlite3
-  - Use `nvm use 20` or see [TROUBLESHOOTING.md](./TROUBLESHOOTING.md) for installation help
+- Node.js 18+
 - npm or yarn
 
 ### Installation
@@ -48,8 +46,11 @@ npm install
 cp .env.example .env.local
 ```
 
-Edit `.env.local` and set your app credentials, `CRON_SECRET`, and LLM config:
+Edit `.env.local` and set your database connection, app credentials, `CRON_SECRET`, and LLM config:
 ```bash
+# Database (Neon pooled connection string)
+DATABASE_URL=postgresql://USER:PASSWORD@HOST/DB?sslmode=require
+
 # Basic Auth (single user)
 APP_AUTH_USER=your-username
 APP_AUTH_PASS=your-strong-password
@@ -65,7 +66,7 @@ OPENAI_RANK_MODEL=gpt-4o-mini
 openssl rand -base64 32
 ```
 
-4. Initialize the database:
+4. Bootstrap schema (automatic on first API request):
 ```bash
 npm run migrate
 ```
@@ -118,7 +119,7 @@ Replace `YOUR_APP_AUTH_USER` and `YOUR_APP_AUTH_PASS` with values from your `.en
 - `npm run build` - Build for production
 - `npm run start` - Start production server
 - `npm run lint` - Run ESLint
-- `npm run migrate` - Initialize or update database
+- `npm run migrate` - Prints Neon schema bootstrap guidance
 
 ### Project Structure
 
@@ -281,6 +282,7 @@ vercel env add APP_AUTH_PASS production
 vercel env add CRON_SECRET production
 vercel env add OPENAI_API_KEY production
 vercel env add OPENAI_RANK_MODEL production
+vercel env add DATABASE_URL production
 ```
 
 Enter your app credentials, a random cron secret, and your OpenAI settings when prompted.
@@ -290,15 +292,12 @@ Enter your app credentials, a random cron secret, and your OpenAI settings when 
 vercel --prod
 ```
 
-4. Initialize database (first deployment only):
-
-SSH into your deployment or use Vercel's serverless function to run:
+4. Bootstrap schema and fetch initial data (first deployment only):
 ```bash
-vercel env pull .env.production
-node scripts/migrate.js
+curl https://your-app.vercel.app/api/health -u YOUR_APP_AUTH_USER:YOUR_APP_AUTH_PASS
 ```
 
-Or trigger the first fetch manually after deployment:
+Then trigger the first fetch manually after deployment:
 ```bash
 curl -X POST https://your-app.vercel.app/api/cron/fetch-feeds \
   -H "Authorization: Bearer YOUR_CRON_SECRET"
@@ -323,30 +322,13 @@ Vercel automatically adds the `CRON_SECRET` header when calling this endpoint.
 
 ### Database Persistence
 
-**Important**: Vercel's serverless functions are stateless, so the SQLite database file is ephemeral by default.
-
-**Options for production:**
-
-1. **Vercel KV/Postgres** (recommended for production scale)
-   - Migrate from SQLite to Vercel Postgres
-   - Requires schema migration
-
-2. **External database** (Supabase, PlanetScale, Railway)
-   - Use hosted Postgres
-   - Update connection in `src/lib/db.ts`
-
-3. **Keep SQLite** (acceptable for V1 demo)
-   - Database resets on each deployment
-   - Feed re-populates from RSS sources
-   - Good enough for low-traffic demo
-
-For V1, option 3 (SQLite) works fine. The database will repopulate automatically via the cron job.
+This app now uses Neon Postgres via `DATABASE_URL`, so feed data and rankings persist across deployments and runtime invocations.
 
 ## Environment Variables
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `DATABASE_PATH` | Path to SQLite database file | `./data/feed.db` |
+| `DATABASE_URL` | Neon Postgres connection string | (required) |
 | `APP_AUTH_USER` | Basic auth username for app/API access | (required) |
 | `APP_AUTH_PASS` | Basic auth password for app/API access | (required) |
 | `CRON_SECRET` | Secret for cron endpoint auth | (required) |

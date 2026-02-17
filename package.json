@@ -10,9 +10,8 @@
     "migrate": "node scripts/migrate.js"
   },
   "dependencies": {
-    "@types/better-sqlite3": "^7.6.13",
+    "@neondatabase/serverless": "^0.10.4",
     "axios": "^1.7.0",
-    "better-sqlite3": "^12.6.2",
     "date-fns": "^3.6.0",
     "next": "^14.2.0",
     "next-themes": "^0.3.0",
