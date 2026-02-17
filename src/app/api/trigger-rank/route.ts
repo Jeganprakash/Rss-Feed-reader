@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { initDb } from '@/lib/db';
-import { rankTopNewestArticles } from '@/lib/article-ranker';
+import type { FeedSource } from '@/types/feed';
+import { rankTopNewestArticles, rankProvidedArticles } from '@/lib/article-ranker';
 
 // Force dynamic rendering
 export const dynamic = 'force-dynamic';
@@ -8,6 +9,7 @@ export const dynamic = 'force-dynamic';
 const DEFAULT_TOP_N = 20;
 const MAX_TOP_N = 100;
 const COOLDOWN_MS = 45_000;
+const VALID_SOURCES: FeedSource[] = ['REUTERS', 'THE_VERGE', 'TECHCRUNCH'];
 
 let initialized = false;
 let rankingInProgress = false;
@@ -44,6 +46,59 @@ function parseTopN(value: unknown): number | null {
   return value;
 }
 
+function parseProvidedItems(
+  value: unknown,
+  topN: number
+): Array<{ id: string; title: string; source: FeedSource; publishedAt: string }> {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  const parsed: Array<{
+    id: string;
+    title: string;
+    source: FeedSource;
+    publishedAt: string;
+  }> = [];
+  const seen = new Set<string>();
+
+  for (const item of value) {
+    if (parsed.length >= topN) break;
+    if (!item || typeof item !== 'object') continue;
+
+    const candidate = item as Record<string, unknown>;
+    const id = candidate.id;
+    const title = candidate.title;
+    const source = candidate.source;
+    const publishedAt = candidate.publishedAt;
+
+    if (
+      typeof id !== 'string' ||
+      typeof title !== 'string' ||
+      typeof source !== 'string' ||
+      typeof publishedAt !== 'string'
+    ) {
+      continue;
+    }
+
+    if (!id.trim() || !title.trim() || !VALID_SOURCES.includes(source as FeedSource)) {
+      continue;
+    }
+
+    if (seen.has(id)) continue;
+    seen.add(id);
+
+    parsed.push({
+      id: id.trim(),
+      title: title.trim(),
+      source: source as FeedSource,
+      publishedAt: publishedAt.trim(),
+    });
+  }
+
+  return parsed;
+}
+
 export async function POST(request: NextRequest) {
   if (rankingInProgress) {
     return jsonNoStore(
@@ -70,9 +125,15 @@ export async function POST(request: NextRequest) {
   }
 
   let topN = DEFAULT_TOP_N;
+  let providedItems: Array<{
+    id: string;
+    title: string;
+    source: FeedSource;
+    publishedAt: string;
+  }> = [];
 
   try {
-    const body = (await request.json()) as { topN?: unknown };
+    const body = (await request.json()) as { topN?: unknown; items?: unknown };
     const parsedTopN = parseTopN(body?.topN);
 
     if (parsedTopN === null) {
@@ -83,6 +144,7 @@ export async function POST(request: NextRequest) {
     }
 
     topN = parsedTopN;
+    providedItems = parseProvidedItems(body?.items, topN);
   } catch {
     // Empty or invalid JSON body falls back to default top N.
   }
@@ -92,13 +154,27 @@ export async function POST(request: NextRequest) {
 
   try {
     ensureDb();
-    const result = await rankTopNewestArticles(topN);
+    let result = await rankTopNewestArticles(topN);
+    let usedProvidedItems = false;
+
+    if (result.processed === 0 && providedItems.length > 0) {
+      result = await rankProvidedArticles(providedItems, topN);
+      usedProvidedItems = true;
+    }
+
+    const message =
+      result.processed === 0
+        ? 'No articles available to rank.'
+        : usedProvidedItems
+          ? `Ranked ${result.processed} loaded articles`
+          : `Ranked ${result.processed} newest articles`;
 
     return jsonNoStore({
       ok: true,
       topN,
+      usedProvidedItems,
       ...result,
-      message: `Ranked ${result.processed} newest articles`,
+      message,
     });
   } catch (error: unknown) {
     console.error('Manual rank error:', error);

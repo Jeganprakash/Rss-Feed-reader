@@ -11,10 +11,26 @@ interface RankCandidate {
   published_at: string;
 }
 
+export interface ProvidedRankCandidate {
+  id: string;
+  title: string;
+  source: FeedSource;
+  publishedAt: string;
+}
+
 interface RankOutput {
   score: number;
   reason: string;
   model: string;
+  usedFallback: boolean;
+}
+
+export interface RankedItem {
+  itemId: string;
+  importanceScore: number;
+  reason: string;
+  model: string;
+  rankedAt: string;
   usedFallback: boolean;
 }
 
@@ -24,6 +40,7 @@ export interface RankBatchResult {
   fallbackRanked: number;
   failed: number;
   model: string;
+  rankings: RankedItem[];
 }
 
 function clampScore(value: number): number {
@@ -176,23 +193,9 @@ async function rankWithLlm(candidate: RankCandidate): Promise<RankOutput> {
   }
 }
 
-/**
- * Rank the top N newest feed items and persist their importance scores.
- */
-export async function rankTopNewestArticles(limit: number): Promise<RankBatchResult> {
+function prepareRankingUpsert() {
   const db = getDb();
-  const safeLimit = Math.max(1, Math.min(limit, 100));
-
-  const candidates = db
-    .prepare(
-      `SELECT id, title, source, published_at
-       FROM feed_items
-       ORDER BY created_at DESC
-       LIMIT ?`
-    )
-    .all(safeLimit) as RankCandidate[];
-
-  const upsertStmt = db.prepare(
+  return db.prepare(
     `INSERT INTO item_rankings (item_id, importance_score, reason, model, ranked_at)
      VALUES (?, ?, ?, ?, ?)
      ON CONFLICT(item_id) DO UPDATE SET
@@ -201,10 +204,15 @@ export async function rankTopNewestArticles(limit: number): Promise<RankBatchRes
        model = excluded.model,
        ranked_at = excluded.ranked_at`
   );
+}
+
+async function rankCandidates(candidates: RankCandidate[]): Promise<RankBatchResult> {
+  const upsertStmt = prepareRankingUpsert();
 
   let llmRanked = 0;
   let fallbackRanked = 0;
   let failed = 0;
+  const rankings: RankedItem[] = [];
 
   for (let i = 0; i < candidates.length; i += RANK_BATCH_SIZE) {
     const batch = candidates.slice(i, i + RANK_BATCH_SIZE);
@@ -226,13 +234,23 @@ export async function rankTopNewestArticles(limit: number): Promise<RankBatchRes
         continue;
       }
 
+      const rankedAt = new Date().toISOString();
       upsertStmt.run(
         result.candidate.id,
         result.ranked.score,
         result.ranked.reason,
         result.ranked.model,
-        new Date().toISOString()
+        rankedAt
       );
+
+      rankings.push({
+        itemId: result.candidate.id,
+        importanceScore: result.ranked.score,
+        reason: result.ranked.reason,
+        model: result.ranked.model,
+        rankedAt,
+        usedFallback: result.ranked.usedFallback,
+      });
 
       if (result.ranked.usedFallback) {
         fallbackRanked++;
@@ -248,5 +266,52 @@ export async function rankTopNewestArticles(limit: number): Promise<RankBatchRes
     fallbackRanked,
     failed,
     model: process.env.OPENAI_API_KEY ? DEFAULT_RANK_MODEL : 'heuristic-fallback',
+    rankings,
   };
+}
+
+/**
+ * Rank the top N newest feed items and persist their importance scores.
+ */
+export async function rankTopNewestArticles(limit: number): Promise<RankBatchResult> {
+  const db = getDb();
+  const safeLimit = Math.max(1, Math.min(limit, 100));
+
+  const candidates = db
+    .prepare(
+      `SELECT id, title, source, published_at
+       FROM feed_items
+       ORDER BY created_at DESC
+       LIMIT ?`
+    )
+    .all(safeLimit) as RankCandidate[];
+
+  return rankCandidates(candidates);
+}
+
+/**
+ * Rank provided items (typically from currently loaded client feed items).
+ * This is useful when runtime-local SQLite has no rows yet.
+ */
+export async function rankProvidedArticles(
+  providedItems: ProvidedRankCandidate[],
+  limit: number
+): Promise<RankBatchResult> {
+  const safeLimit = Math.max(1, Math.min(limit, 100));
+  const sliced = providedItems.slice(0, safeLimit);
+  const seen = new Set<string>();
+
+  const candidates: RankCandidate[] = [];
+  for (const item of sliced) {
+    if (!item.id || seen.has(item.id)) continue;
+    seen.add(item.id);
+    candidates.push({
+      id: item.id,
+      title: item.title,
+      source: item.source,
+      published_at: item.publishedAt,
+    });
+  }
+
+  return rankCandidates(candidates);
 }

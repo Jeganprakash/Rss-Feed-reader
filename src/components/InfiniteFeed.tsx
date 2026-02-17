@@ -28,6 +28,13 @@ interface TriggerRankResponse {
   fallbackRanked?: number;
   failed?: number;
   model?: string;
+  usedProvidedItems?: boolean;
+  rankings?: Array<{
+    itemId: string;
+    importanceScore: number;
+    reason: string;
+    rankedAt: string;
+  }>;
   error?: string;
   retryAfterSeconds?: number;
 }
@@ -46,6 +53,14 @@ const SOURCE_FILTER_OPTIONS: Array<{ value: SourceFilter; label: string }> = [
 function parseDateToTime(value: string): number {
   const timestamp = new Date(value).getTime();
   return Number.isNaN(timestamp) ? 0 : timestamp;
+}
+
+function getNewestTimestamp(item: FeedItem): number {
+  const publishedTime = parseDateToTime(item.publishedAt);
+  if (publishedTime > 0) {
+    return publishedTime;
+  }
+  return parseDateToTime(item.createdAt);
 }
 
 export default function InfiniteFeed() {
@@ -172,10 +187,20 @@ export default function InfiniteFeed() {
     setRankError(null);
 
     try {
+      const rankInput = [...items]
+        .sort((a, b) => getNewestTimestamp(b) - getNewestTimestamp(a))
+        .slice(0, RANK_TOP_N)
+        .map((item) => ({
+          id: item.id,
+          title: item.title,
+          source: item.source,
+          publishedAt: item.publishedAt,
+        }));
+
       const res = await fetch("/api/trigger-rank", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ topN: RANK_TOP_N }),
+        body: JSON.stringify({ topN: RANK_TOP_N, items: rankInput }),
         cache: "no-store",
       });
 
@@ -199,20 +224,33 @@ export default function InfiniteFeed() {
       const llmRanked = payload.llmRanked ?? 0;
       const fallbackRanked = payload.fallbackRanked ?? 0;
       const failed = payload.failed ?? 0;
+      const rankings = payload.rankings ?? [];
+
+      if (rankings.length > 0) {
+        const rankingsById = new Map(rankings.map((entry) => [entry.itemId, entry]));
+        setItems((prev) =>
+          prev.map((item) => {
+            const ranked = rankingsById.get(item.id);
+            if (!ranked) return item;
+            return {
+              ...item,
+              importanceScore: ranked.importanceScore,
+              importanceReason: ranked.reason,
+              rankedAt: ranked.rankedAt,
+            };
+          })
+        );
+      }
+
+      const rankedTarget = payload.usedProvidedItems
+        ? "loaded articles"
+        : "newest articles";
 
       setRankMessage(
-        `Ranked ${processed} newest articles (LLM: ${llmRanked}, fallback: ${fallbackRanked}, failed: ${failed}).`
+        processed === 0
+          ? "No articles available to rank."
+          : `Ranked ${processed} ${rankedTarget} (LLM: ${llmRanked}, fallback: ${fallbackRanked}, failed: ${failed}).`
       );
-
-      const refreshed = await fetchFeed({
-        currentCursor: null,
-        mode: "replace",
-        bypassCache: true,
-      });
-
-      if (!refreshed) {
-        setRankError("Ranking completed, but feed refresh failed. Please retry.");
-      }
     } catch (err: unknown) {
       const message =
         err instanceof Error
@@ -222,7 +260,7 @@ export default function InfiniteFeed() {
     } finally {
       setRanking(false);
     }
-  }, [fetchFeed, loading, pulling, ranking]);
+  }, [items, loading, pulling, ranking]);
 
   const displayedItems = useMemo(() => {
     const filteredItems =
@@ -237,7 +275,7 @@ export default function InfiniteFeed() {
         if (aScore !== bScore) return bScore - aScore;
       }
 
-      return parseDateToTime(b.createdAt) - parseDateToTime(a.createdAt);
+      return getNewestTimestamp(b) - getNewestTimestamp(a);
     });
   }, [items, sortMode, sourceFilter]);
 
