@@ -34,18 +34,30 @@ export function getMixedFeed(options: FeedQueryOptions = {}) {
     if (cursorCreatedAt) {
       rows = db
         .prepare(
-          `SELECT * FROM feed_items
-           WHERE source = ? AND created_at < ?
-           ORDER BY created_at DESC
+          `SELECT feed_items.*,
+                  item_rankings.importance_score AS importance_score,
+                  item_rankings.reason AS importance_reason,
+                  item_rankings.ranked_at AS ranked_at
+           FROM feed_items
+           LEFT JOIN item_rankings ON item_rankings.item_id = feed_items.id
+           WHERE feed_items.source = ? AND feed_items.created_at < ?
+           ORDER BY feed_items.created_at DESC,
+                    COALESCE(item_rankings.importance_score, 50) DESC
            LIMIT ?`
         )
         .all(source, cursorCreatedAt, limit) as Record<string, unknown>[];
     } else {
       rows = db
         .prepare(
-          `SELECT * FROM feed_items
-           WHERE source = ?
-           ORDER BY created_at DESC
+          `SELECT feed_items.*,
+                  item_rankings.importance_score AS importance_score,
+                  item_rankings.reason AS importance_reason,
+                  item_rankings.ranked_at AS ranked_at
+           FROM feed_items
+           LEFT JOIN item_rankings ON item_rankings.item_id = feed_items.id
+           WHERE feed_items.source = ?
+           ORDER BY feed_items.created_at DESC,
+                    COALESCE(item_rankings.importance_score, 50) DESC
            LIMIT ?`
         )
         .all(source, limit) as Record<string, unknown>[];
@@ -62,6 +74,18 @@ export function getMixedFeed(options: FeedQueryOptions = {}) {
         urlSource: row.url_source as string,
         createdAt: row.created_at as string,
         normalizedTitle: row.normalized_title as string,
+        importanceScore:
+          typeof row.importance_score === 'number'
+            ? row.importance_score
+            : null,
+        importanceReason:
+          typeof row.importance_reason === 'string'
+            ? row.importance_reason
+            : null,
+        rankedAt:
+          typeof row.ranked_at === 'string'
+            ? row.ranked_at
+            : null,
       }))
     );
   }
@@ -73,11 +97,21 @@ export function getMixedFeed(options: FeedQueryOptions = {}) {
   );
 
   while (items.length < limit) {
-    // Shuffle sources each round for fairness
-    const shuffled = [...ALL_SOURCES].sort(() => Math.random() - 0.5);
+    // Prioritize higher-scored items while still pulling max one per source each round.
+    const prioritizedSources = [...ALL_SOURCES].sort((a, b) => {
+      const aIdx = indices.get(a) || 0;
+      const bIdx = indices.get(b) || 0;
+      const aScore = sourceQueues.get(a)?.[aIdx]?.importanceScore ?? 50;
+      const bScore = sourceQueues.get(b)?.[bIdx]?.importanceScore ?? 50;
+
+      if (aScore === bScore) {
+        return Math.random() - 0.5;
+      }
+      return bScore - aScore;
+    });
     let addedThisRound = false;
 
-    for (const source of shuffled) {
+    for (const source of prioritizedSources) {
       if (items.length >= limit) break;
 
       const queue = sourceQueues.get(source) || [];

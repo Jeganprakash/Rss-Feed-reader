@@ -32,3 +32,16 @@ VALUES
   ('REUTERS', NULL, NULL, NULL),
   ('THE_VERGE', NULL, NULL, NULL),
   ('TECHCRUNCH', NULL, NULL, NULL);
+
+-- Item rankings table: stores per-article importance scores from LLM ranking
+CREATE TABLE IF NOT EXISTS item_rankings (
+  item_id TEXT PRIMARY KEY,
+  importance_score REAL NOT NULL,
+  reason TEXT,
+  model TEXT NOT NULL,
+  ranked_at TEXT NOT NULL,
+  FOREIGN KEY (item_id) REFERENCES feed_items(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_item_rankings_score ON item_rankings(importance_score DESC);
+CREATE INDEX IF NOT EXISTS idx_item_rankings_ranked_at ON item_rankings(ranked_at DESC);

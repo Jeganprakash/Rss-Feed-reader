@@ -1,9 +1,9 @@
 "use client";
 
-import { useState, useCallback, useEffect } from "react";
+import { useState, useCallback, useEffect, useMemo } from "react";
 import { useInView } from "react-intersection-observer";
 import FeedCard from "./FeedCard";
-import type { FeedItem, FeedResponse } from "@/types/feed";
+import type { FeedItem, FeedResponse, FeedSource } from "@/types/feed";
 
 type FetchMode = "append" | "replace";
 
@@ -20,6 +20,34 @@ interface TriggerFetchResponse {
   retryAfterSeconds?: number;
 }
 
+interface TriggerRankResponse {
+  ok: boolean;
+  topN?: number;
+  processed?: number;
+  llmRanked?: number;
+  fallbackRanked?: number;
+  failed?: number;
+  model?: string;
+  error?: string;
+  retryAfterSeconds?: number;
+}
+
+const RANK_TOP_N = 20;
+type SortMode = "priority" | "newest";
+type SourceFilter = "ALL" | FeedSource;
+
+const SOURCE_FILTER_OPTIONS: Array<{ value: SourceFilter; label: string }> = [
+  { value: "ALL", label: "All Sources" },
+  { value: "REUTERS", label: "Reuters" },
+  { value: "THE_VERGE", label: "The Verge" },
+  { value: "TECHCRUNCH", label: "TechCrunch" },
+];
+
+function parseDateToTime(value: string): number {
+  const timestamp = new Date(value).getTime();
+  return Number.isNaN(timestamp) ? 0 : timestamp;
+}
+
 export default function InfiniteFeed() {
   const [items, setItems] = useState<FeedItem[]>([]);
   const [cursor, setCursor] = useState<string | null>(null);
@@ -30,6 +58,11 @@ export default function InfiniteFeed() {
   const [pulling, setPulling] = useState(false);
   const [pullMessage, setPullMessage] = useState<string | null>(null);
   const [pullError, setPullError] = useState<string | null>(null);
+  const [ranking, setRanking] = useState(false);
+  const [rankMessage, setRankMessage] = useState<string | null>(null);
+  const [rankError, setRankError] = useState<string | null>(null);
+  const [sortMode, setSortMode] = useState<SortMode>("priority");
+  const [sourceFilter, setSourceFilter] = useState<SourceFilter>("ALL");
 
   const { ref: bottomRef, inView } = useInView({ threshold: 0 });
 
@@ -74,7 +107,7 @@ export default function InfiniteFeed() {
   );
 
   const handlePullNewFeed = useCallback(async () => {
-    if (pulling || loading) return;
+    if (pulling || loading || ranking) return;
 
     setPulling(true);
     setPullMessage(null);
@@ -129,7 +162,84 @@ export default function InfiniteFeed() {
     } finally {
       setPulling(false);
     }
-  }, [fetchFeed, loading, pulling]);
+  }, [fetchFeed, loading, pulling, ranking]);
+
+  const handleRankTopNewest = useCallback(async () => {
+    if (ranking || loading || pulling) return;
+
+    setRanking(true);
+    setRankMessage(null);
+    setRankError(null);
+
+    try {
+      const res = await fetch("/api/trigger-rank", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ topN: RANK_TOP_N }),
+        cache: "no-store",
+      });
+
+      let payload: TriggerRankResponse | null = null;
+      try {
+        payload = (await res.json()) as TriggerRankResponse;
+      } catch {
+        payload = null;
+      }
+
+      if (!res.ok || !payload?.ok) {
+        const fallback = "Could not rank articles. Please try again.";
+        const message =
+          payload?.retryAfterSeconds && payload.retryAfterSeconds > 0
+            ? `Please wait ${payload.retryAfterSeconds}s before ranking again.`
+            : payload?.error || fallback;
+        throw new Error(message);
+      }
+
+      const processed = payload.processed ?? 0;
+      const llmRanked = payload.llmRanked ?? 0;
+      const fallbackRanked = payload.fallbackRanked ?? 0;
+      const failed = payload.failed ?? 0;
+
+      setRankMessage(
+        `Ranked ${processed} newest articles (LLM: ${llmRanked}, fallback: ${fallbackRanked}, failed: ${failed}).`
+      );
+
+      const refreshed = await fetchFeed({
+        currentCursor: null,
+        mode: "replace",
+        bypassCache: true,
+      });
+
+      if (!refreshed) {
+        setRankError("Ranking completed, but feed refresh failed. Please retry.");
+      }
+    } catch (err: unknown) {
+      const message =
+        err instanceof Error
+          ? err.message
+          : "Could not rank articles. Please try again.";
+      setRankError(message);
+    } finally {
+      setRanking(false);
+    }
+  }, [fetchFeed, loading, pulling, ranking]);
+
+  const displayedItems = useMemo(() => {
+    const filteredItems =
+      sourceFilter === "ALL"
+        ? items
+        : items.filter((item) => item.source === sourceFilter);
+
+    return [...filteredItems].sort((a, b) => {
+      if (sortMode === "priority") {
+        const aScore = a.importanceScore ?? 50;
+        const bScore = b.importanceScore ?? 50;
+        if (aScore !== bScore) return bScore - aScore;
+      }
+
+      return parseDateToTime(b.createdAt) - parseDateToTime(a.createdAt);
+    });
+  }, [items, sortMode, sourceFilter]);
 
   // Initial load
   useEffect(() => {
@@ -139,11 +249,11 @@ export default function InfiniteFeed() {
 
   // Load more when bottom is in view
   useEffect(() => {
-    if (inView && hasMore && !loading && !pulling) {
+    if (inView && hasMore && !loading && !pulling && !ranking) {
       fetchFeed({ currentCursor: cursor, mode: "append" });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [inView, hasMore, pulling]);
+  }, [inView, hasMore, pulling, ranking]);
 
   if (initialLoad) {
     return (
@@ -166,10 +276,17 @@ export default function InfiniteFeed() {
           </button>
           <button
             onClick={handlePullNewFeed}
-            disabled={pulling || loading}
+            disabled={pulling || loading || ranking}
             className="rounded-lg border border-feed-border bg-feed-surface px-4 py-2 text-sm font-medium text-feed-text transition-colors hover:border-feed-accent/50 disabled:cursor-not-allowed disabled:opacity-60"
           >
             {pulling ? "Pulling..." : "Pull New Feed"}
+          </button>
+          <button
+            onClick={handleRankTopNewest}
+            disabled={ranking || loading || pulling}
+            className="rounded-lg border border-feed-border bg-feed-surface px-4 py-2 text-sm font-medium text-feed-text transition-colors hover:border-feed-accent/50 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {ranking ? `Ranking Top ${RANK_TOP_N}...` : `Rank Top ${RANK_TOP_N}`}
           </button>
         </div>
         {pullMessage && (
@@ -182,6 +299,16 @@ export default function InfiniteFeed() {
           </p>
         )}
         {pullError && <p className="mt-3 text-sm text-red-500">{pullError}</p>}
+        {rankMessage && (
+          <p
+            role="status"
+            aria-live="polite"
+            className="mt-3 text-sm text-feed-muted"
+          >
+            {rankMessage}
+          </p>
+        )}
+        {rankError && <p className="mt-3 text-sm text-red-500">{rankError}</p>}
       </div>
     );
   }
@@ -197,10 +324,17 @@ export default function InfiniteFeed() {
         </p>
         <button
           onClick={handlePullNewFeed}
-          disabled={pulling || loading}
+          disabled={pulling || loading || ranking}
           className="rounded-lg border border-feed-border bg-feed-surface px-4 py-2 text-sm font-medium text-feed-text transition-colors hover:border-feed-accent/50 disabled:cursor-not-allowed disabled:opacity-60"
         >
           {pulling ? "Pulling..." : "Pull New Feed"}
+        </button>
+        <button
+          onClick={handleRankTopNewest}
+          disabled={ranking || loading || pulling}
+          className="ml-2 rounded-lg border border-feed-border bg-feed-surface px-4 py-2 text-sm font-medium text-feed-text transition-colors hover:border-feed-accent/50 disabled:cursor-not-allowed disabled:opacity-60"
+        >
+          {ranking ? `Ranking Top ${RANK_TOP_N}...` : `Rank Top ${RANK_TOP_N}`}
         </button>
         {pullMessage && (
           <p
@@ -212,20 +346,72 @@ export default function InfiniteFeed() {
           </p>
         )}
         {pullError && <p className="mt-3 text-sm text-red-500">{pullError}</p>}
+        {rankMessage && (
+          <p
+            role="status"
+            aria-live="polite"
+            className="mt-3 text-sm text-feed-muted"
+          >
+            {rankMessage}
+          </p>
+        )}
+        {rankError && <p className="mt-3 text-sm text-red-500">{rankError}</p>}
       </div>
     );
   }
 
   return (
     <div className="space-y-3">
-      <div className="mb-2 flex justify-end">
-        <button
-          onClick={handlePullNewFeed}
-          disabled={pulling || loading}
-          className="rounded-lg border border-feed-border bg-feed-surface px-4 py-2 text-sm font-medium text-feed-text transition-colors hover:border-feed-accent/50 disabled:cursor-not-allowed disabled:opacity-60"
-        >
-          {pulling ? "Pulling..." : "Pull New Feed"}
-        </button>
+      <div className="mb-2 flex flex-wrap items-end justify-between gap-3">
+        <div className="flex flex-wrap items-end gap-2">
+          <label className="flex flex-col gap-1">
+            <span className="text-xs font-medium text-feed-muted">Sort</span>
+            <select
+              value={sortMode}
+              onChange={(event) =>
+                setSortMode(event.target.value as SortMode)
+              }
+              className="rounded-lg border border-feed-border bg-feed-surface px-3 py-2 text-sm text-feed-text outline-none transition-colors focus:border-feed-accent/60"
+            >
+              <option value="priority">Priority</option>
+              <option value="newest">Newest</option>
+            </select>
+          </label>
+
+          <label className="flex flex-col gap-1">
+            <span className="text-xs font-medium text-feed-muted">Source</span>
+            <select
+              value={sourceFilter}
+              onChange={(event) =>
+                setSourceFilter(event.target.value as SourceFilter)
+              }
+              className="rounded-lg border border-feed-border bg-feed-surface px-3 py-2 text-sm text-feed-text outline-none transition-colors focus:border-feed-accent/60"
+            >
+              {SOURCE_FILTER_OPTIONS.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
+
+        <div className="flex gap-2">
+          <button
+            onClick={handleRankTopNewest}
+            disabled={ranking || loading || pulling}
+            className="rounded-lg border border-feed-border bg-feed-surface px-4 py-2 text-sm font-medium text-feed-text transition-colors hover:border-feed-accent/50 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {ranking ? `Ranking Top ${RANK_TOP_N}...` : `Rank Top ${RANK_TOP_N}`}
+          </button>
+          <button
+            onClick={handlePullNewFeed}
+            disabled={pulling || loading || ranking}
+            className="rounded-lg border border-feed-border bg-feed-surface px-4 py-2 text-sm font-medium text-feed-text transition-colors hover:border-feed-accent/50 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {pulling ? "Pulling..." : "Pull New Feed"}
+          </button>
+        </div>
       </div>
 
       {pullMessage && (
@@ -235,8 +421,20 @@ export default function InfiniteFeed() {
       )}
 
       {pullError && <p className="text-sm text-red-500">{pullError}</p>}
+      {rankMessage && (
+        <p role="status" aria-live="polite" className="text-sm text-feed-muted">
+          {rankMessage}
+        </p>
+      )}
+      {rankError && <p className="text-sm text-red-500">{rankError}</p>}
 
-      {items.map((item) => (
+      {displayedItems.length === 0 && items.length > 0 && (
+        <p className="py-4 text-center text-sm text-feed-muted">
+          No articles match the selected source filter.
+        </p>
+      )}
+
+      {displayedItems.map((item) => (
         <FeedCard key={item.id} item={item} />
       ))}
 
@@ -249,7 +447,7 @@ export default function InfiniteFeed() {
         </div>
       )}
 
-      {!hasMore && items.length > 0 && (
+      {!hasMore && displayedItems.length > 0 && (
         <p className="py-6 text-center text-sm text-feed-muted">
           You&apos;re all caught up.
         </p>

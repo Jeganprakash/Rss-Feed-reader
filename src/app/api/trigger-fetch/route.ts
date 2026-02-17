@@ -88,7 +88,3 @@ async function runManualFetch() {
 export async function POST() {
   return runManualFetch();
 }
-
-export async function GET() {
-  return runManualFetch();
-}

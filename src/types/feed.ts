@@ -7,6 +7,9 @@ export interface FeedItem {
   urlSource: string;
   createdAt: string;
   normalizedTitle: string;
+  importanceScore: number | null;
+  importanceReason: string | null;
+  rankedAt: string | null;
 }
 
 export type FeedSource = 'REUTERS' | 'THE_VERGE' | 'TECHCRUNCH';

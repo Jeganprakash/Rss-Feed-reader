@@ -48,6 +48,14 @@ export default function FeedCard({ item }: { item: FeedItem }) {
         <span className="text-xs text-feed-muted">
           {formatTimeAgo(item.publishedAt)}
         </span>
+        {typeof item.importanceScore === "number" && (
+          <span
+            className="text-xs font-semibold text-feed-accent"
+            title={item.importanceReason || "LLM importance score"}
+          >
+            Priority {Math.round(item.importanceScore)}
+          </span>
+        )}
       </div>
       <h2 className="text-base font-medium leading-snug text-feed-text sm:text-lg">
         {item.title}

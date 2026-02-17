@@ -6,6 +6,8 @@ A modern, mobile-first news aggregator that combines RSS feeds from Reuters, The
 
 - 🔄 **Infinite scroll** feed with fair source mixing
 - ⬇️ **Pull New Feed button** for on-demand ingestion
+- 🤖 **Manual Rank Top N** button with LLM scoring
+- 🔐 **Basic Auth** gate for single-user access
 - 🌓 **Dark mode** with system preference detection
 - 📱 **Mobile-first** responsive design
 - 🎯 **Smart deduplication** to avoid repeat articles
@@ -46,8 +48,19 @@ npm install
 cp .env.example .env.local
 ```
 
-Edit `.env.local` and set your `CRON_SECRET` to a random string:
+Edit `.env.local` and set your app credentials, `CRON_SECRET`, and LLM config:
 ```bash
+# Basic Auth (single user)
+APP_AUTH_USER=your-username
+APP_AUTH_PASS=your-strong-password
+
+# Cron Security
+CRON_SECRET=your-random-secret-here-change-in-production
+
+# LLM Ranking
+OPENAI_API_KEY=sk-your-openai-api-key
+OPENAI_RANK_MODEL=gpt-4o-mini
+
 # Generate a random secret (example):
 openssl rand -base64 32
 ```
@@ -70,12 +83,13 @@ The feeds will be empty initially. To populate:
 
 **Option 1: Wait for cron** (runs daily at 00:00 UTC in production)
 
-**Option 2: Use the in-app button**  
-Click **Pull New Feed** on the home page.
+**Option 2: Use the in-app buttons**  
+Click **Pull New Feed** and/or **Rank Top 20** on the home page.
 
 **Option 3: Manual trigger API** (development):
 ```bash
-curl -X POST http://localhost:3000/api/trigger-fetch
+curl -X POST http://localhost:3000/api/trigger-fetch \
+  -u YOUR_APP_AUTH_USER:YOUR_APP_AUTH_PASS
 ```
 
 **Option 4: Protected cron endpoint**:
@@ -84,7 +98,17 @@ curl -X POST http://localhost:3000/api/cron/fetch-feeds \
   -H "Authorization: Bearer YOUR_CRON_SECRET"
 ```
 
+**Option 5: Manual ranking API** (development):
+```bash
+curl -X POST http://localhost:3000/api/trigger-rank \
+  -H "Content-Type: application/json" \
+  -d '{"topN":20}' \
+  -u YOUR_APP_AUTH_USER:YOUR_APP_AUTH_PASS
+```
+
 Replace `YOUR_CRON_SECRET` with the value from your `.env.local`.
+
+Replace `YOUR_APP_AUTH_USER` and `YOUR_APP_AUTH_PASS` with values from your `.env.local`.
 
 ## Development
 
@@ -109,6 +133,7 @@ src/
 │       ├── feed/route.ts     # GET /api/feed (paginated feed)
 │       ├── health/route.ts   # GET /api/health (status check)
 │       ├── trigger-fetch/route.ts  # POST /api/trigger-fetch
+│       ├── trigger-rank/route.ts   # POST /api/trigger-rank
 │       └── cron/
 │           └── fetch-feeds/route.ts  # POST /api/cron/fetch-feeds
 ├── components/
@@ -118,6 +143,7 @@ src/
 ├── lib/
 │   ├── db.ts                 # Database connection
 │   ├── rss-fetcher.ts        # RSS fetching service
+│   ├── article-ranker.ts     # LLM + fallback ranking service
 │   ├── deduplicator.ts       # Deduplication logic
 │   └── feed-mixer.ts         # Fair mixing algorithm
 └── types/
@@ -125,6 +151,15 @@ src/
 ```
 
 ## API Reference
+
+### Authentication
+
+All routes are protected by HTTP Basic Auth except `/api/cron/fetch-feeds`.
+
+Example:
+```bash
+curl -u YOUR_APP_AUTH_USER:YOUR_APP_AUTH_PASS http://localhost:3000/api/feed
+```
 
 ### GET /api/feed
 
@@ -188,7 +223,7 @@ Triggers RSS feed fetching (called by Vercel Cron).
 Triggers manual RSS fetching for the in-app **Pull New Feed** button.
 
 **Notes:**
-- No auth header required.
+- Protected by HTTP Basic Auth middleware.
 - Protected by a short cooldown and in-flight lock to avoid overlapping fetches.
 
 **Response:**
@@ -197,6 +232,36 @@ Triggers manual RSS fetching for the in-app **Pull New Feed** button.
   "ok": true,
   "itemsIngested": 3,
   "message": "Feed pull completed successfully"
+}
+```
+
+### POST /api/trigger-rank
+
+Triggers manual ranking for the top N newest articles.
+
+**Request Body (optional):**
+```json
+{
+  "topN": 20
+}
+```
+
+**Notes:**
+- Protected by HTTP Basic Auth middleware.
+- Uses LLM ranking when `OPENAI_API_KEY` is set, otherwise falls back to heuristic scoring.
+- Protected by cooldown and in-flight lock to avoid overlap.
+
+**Response:**
+```json
+{
+  "ok": true,
+  "topN": 20,
+  "processed": 20,
+  "llmRanked": 20,
+  "fallbackRanked": 0,
+  "failed": 0,
+  "model": "gpt-4o-mini",
+  "message": "Ranked 20 newest articles"
 }
 ```
 
@@ -211,10 +276,14 @@ npm i -g vercel
 
 2. Set up environment variables in Vercel:
 ```bash
+vercel env add APP_AUTH_USER production
+vercel env add APP_AUTH_PASS production
 vercel env add CRON_SECRET production
+vercel env add OPENAI_API_KEY production
+vercel env add OPENAI_RANK_MODEL production
 ```
 
-Enter a random secret when prompted (use `openssl rand -base64 32` to generate).
+Enter your app credentials, a random cron secret, and your OpenAI settings when prompted.
 
 3. Deploy:
 ```bash
@@ -278,7 +347,11 @@ For V1, option 3 (SQLite) works fine. The database will repopulate automatically
 | Variable | Description | Default |
 |----------|-------------|---------|
 | `DATABASE_PATH` | Path to SQLite database file | `./data/feed.db` |
+| `APP_AUTH_USER` | Basic auth username for app/API access | (required) |
+| `APP_AUTH_PASS` | Basic auth password for app/API access | (required) |
 | `CRON_SECRET` | Secret for cron endpoint auth | (required) |
+| `OPENAI_API_KEY` | OpenAI API key for LLM ranking | (optional) |
+| `OPENAI_RANK_MODEL` | OpenAI model for ranking | `gpt-4o-mini` |
 | `REUTERS_RSS_URL` | Reuters RSS feed URL | Google News Reuters query |
 | `VERGE_RSS_URL` | The Verge RSS feed URL | `https://www.theverge.com/rss/index.xml` |
 | `TECHCRUNCH_RSS_URL` | TechCrunch RSS feed URL | `https://techcrunch.com/feed/` |
