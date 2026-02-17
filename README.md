@@ -5,6 +5,7 @@ A modern, mobile-first news aggregator that combines RSS feeds from Reuters, The
 ## Features
 
 - 🔄 **Infinite scroll** feed with fair source mixing
+- ⬇️ **Pull New Feed button** for on-demand ingestion
 - 🌓 **Dark mode** with system preference detection
 - 📱 **Mobile-first** responsive design
 - 🎯 **Smart deduplication** to avoid repeat articles
@@ -67,9 +68,17 @@ Open [http://localhost:3000](http://localhost:3000) to see the app.
 
 The feeds will be empty initially. To populate:
 
-**Option 1: Wait for cron** (runs every 15 minutes in production)
+**Option 1: Wait for cron** (runs daily at 00:00 UTC in production)
 
-**Option 2: Manual trigger** (development):
+**Option 2: Use the in-app button**  
+Click **Pull New Feed** on the home page.
+
+**Option 3: Manual trigger API** (development):
+```bash
+curl -X POST http://localhost:3000/api/trigger-fetch
+```
+
+**Option 4: Protected cron endpoint**:
 ```bash
 curl -X POST http://localhost:3000/api/cron/fetch-feeds \
   -H "Authorization: Bearer YOUR_CRON_SECRET"
@@ -99,6 +108,7 @@ src/
 │   └── api/
 │       ├── feed/route.ts     # GET /api/feed (paginated feed)
 │       ├── health/route.ts   # GET /api/health (status check)
+│       ├── trigger-fetch/route.ts  # POST /api/trigger-fetch
 │       └── cron/
 │           └── fetch-feeds/route.ts  # POST /api/cron/fetch-feeds
 ├── components/
@@ -173,6 +183,23 @@ Triggers RSS feed fetching (called by Vercel Cron).
 }
 ```
 
+### POST /api/trigger-fetch
+
+Triggers manual RSS fetching for the in-app **Pull New Feed** button.
+
+**Notes:**
+- No auth header required.
+- Protected by a short cooldown and in-flight lock to avoid overlapping fetches.
+
+**Response:**
+```json
+{
+  "ok": true,
+  "itemsIngested": 3,
+  "message": "Feed pull completed successfully"
+}
+```
+
 ## Deployment
 
 ### Deploy to Vercel
@@ -210,14 +237,14 @@ curl -X POST https://your-app.vercel.app/api/cron/fetch-feeds \
 
 ### Vercel Cron Configuration
 
-The `vercel.json` configures a cron job to run every 15 minutes:
+The `vercel.json` configures a cron job to run daily at `00:00 UTC`:
 
 ```json
 {
   "crons": [
     {
       "path": "/api/cron/fetch-feeds",
-      "schedule": "*/15 * * * *"
+      "schedule": "0 0 * * *"
     }
   ]
 }
