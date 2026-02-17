@@ -17,6 +17,8 @@ const FEED_SOURCES: Record<FeedSource, string> = {
     process.env.TECHCRUNCH_RSS_URL || 'https://techcrunch.com/feed/',
 };
 
+const FEED_FETCH_TIMEOUT_MS = 8000;
+
 /**
  * Resolve a Google News redirect URL to the original article URL.
  * Google News RSS links go through a redirect; we follow it to get
@@ -35,16 +37,45 @@ async function resolveGoogleNewsUrl(googleUrl: string): Promise<string> {
   }
 }
 
+async function fetchFeedXml(url: string): Promise<string> {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), FEED_FETCH_TIMEOUT_MS);
+
+  try {
+    const response = await fetch(url, {
+      method: 'GET',
+      signal: controller.signal,
+      headers: {
+        'User-Agent': 'RSS-Mix-Fetcher/1.0',
+      },
+      cache: 'no-store',
+    });
+
+    if (!response.ok) {
+      throw new Error(`Feed fetch failed with ${response.status}`);
+    }
+
+    return await response.text();
+  } catch (error: unknown) {
+    if (error instanceof Error && error.name === 'AbortError') {
+      throw new Error('Feed fetch timeout');
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
 async function fetchSingleSource(source: FeedSource): Promise<RawFeedEntry[]> {
   const url = FEED_SOURCES[source];
-
-  // Add timeout to prevent hanging
-  const feed = await Promise.race([
-    parser.parseURL(url),
-    new Promise((_, reject) =>
-      setTimeout(() => reject(new Error('Feed fetch timeout')), 8000)
-    )
-  ]) as any;
+  const xml = await fetchFeedXml(url);
+  const feed = (await parser.parseString(xml)) as {
+    items?: Array<{
+      title?: string;
+      link?: string;
+      pubDate?: string;
+    }>;
+  };
 
   const entries: RawFeedEntry[] = [];
 
